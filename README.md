@@ -103,9 +103,9 @@ dashboards you could do that as follows (in your browser):
 
 * https://your.selks.IP.here/ - Scirius ruleset management and a central point for all dashboards and EveBox
 
-You need to authenticate to access to the web interface. The default user/password is the
-same as for local access: ``selks-user/selks-user``. Don't forget to change credentials at first
-login. You can do that by going to ``Account settings`` in the top left dropdown menu of
+You need to authenticate to access to the web interface. 
+* The default user/password is the same as for local access: ``selks-user/selks-user``.
+Don't forget to change credentials at first login. You can do that by going to ``Account settings`` in the top left dropdown menu of
 Scirius.
 
 ### Getting help
