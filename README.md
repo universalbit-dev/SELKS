@@ -76,6 +76,10 @@ sudo -E docker compose up -d
 * [Etnetera](https://www.etnetera.cz/security)
 * [Hunting-Rules](https://github.com/travisbgreen/hunting-rules)
 
+### Hardware Requirements: 
+---
+200GB+ SSD grade is recommended.
+
 ### Threat Hunting
 ---
 The usage of Suricata data is further enhanced by Stamus' developed Scirius, a threat hunting interface. The interface is specifically designed for Suricata events and combines a drill down approach to pivot for quick exploration of alerts and NSM events. It includes predefined hunting filters and enhanced contextual views:
