@@ -1,7 +1,7 @@
 - Support UniversalBit Project - https://github.com/universalbit-dev/universalbit-dev/tree/main/support
 - Disambiguation - https://en.wikipedia.org/wiki/Wikipedia:Disambiguation
 
-### SELKS 404 != 104
+### SELKS {404 != 104}
 
 ### Intro
 SELKS is a free and open source Debian-based IDS/IPS/Network Security Monitoring platform 
