@@ -71,7 +71,10 @@ sudo -E docker compose up -d
 * [Docker](https://github.com/StamusNetworks/SELKS/wiki/Docker)
 * [AttackDetection](https://github.com/ptresearch/AttackDetection)
 * [Snort](https://www.snort.org/)
-* [SSLBL](https://sslbl.abuse.ch/)
+* [Sslbl](https://sslbl.abuse.ch/)
+* [Proofpoint](https://www.proofpoint.com/us)
+* [Etnetera](https://www.etnetera.cz/security)
+* [Hunting-Rules](https://github.com/travisbgreen/hunting-rules)
 
 ### Threat Hunting
 ---
