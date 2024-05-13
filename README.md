@@ -147,7 +147,7 @@ If you encounter a problem, you can open a [issue](https://github.com/StamusNetw
 * Automated classification and alert triage
 * Management of multiple probes from single console
 * Seamless integration with SOAR, SIEM, XDR, EDR, IR
-* Multi-tenant operation
+* Multi-tenant Cloud 
 * Configuration backup and restoration 
 
 
