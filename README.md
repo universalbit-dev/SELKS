@@ -70,7 +70,8 @@ sudo -E docker compose up -d
 ---
 * [Docker](https://github.com/StamusNetworks/SELKS/wiki/Docker)
 * [AttackDetection](https://github.com/ptresearch/AttackDetection)
-
+* [Snort](https://www.snort.org/)
+* [SSLBL](https://sslbl.abuse.ch/)
 
 ### Threat Hunting
 ---
@@ -92,13 +93,6 @@ If you are a new to Suricata, you can [read](https://www.stamus-networks.com/blo
 Here is an extract of the dashboards list: SN-ALERTS, SN-ALL, SN-ANOMALY, SN-DHCP, SN-DNS, SN-DNP3, SN-FILE-Transactions, SN-FLOW, SN-HTTP, SN-HUNT-1, SN-IDS, SN-IKEv2, SN-KRB5, SN-MQTT, SN-NFS, SN-OVERVIEW, SN-RDP, SN-RFB, SN-SANS-MTA-Training, SN-SIP, SN-SMB, SN-SMTP, SN-SNMP, SN-SSH, SN-STATS, SN-TLS, SN-VLAN, SN-TFTP, SN-TrafficID
 
 Additional visualizations and dashboards are also available in the ``Events viewer`` (EveBox).
-
-
-### Prerequisites
----
-##### The minimal configuration for production usage is 2 cores and 9 Gb of memory. As Suricata
-and Elastisearch are multithreaded, the more cores you have the better it is.
-Regarding memory, the more traffic to monitor you have, the more getting some extra memory will be interesting.
 
 ### Usage and logon credentials
 ---
