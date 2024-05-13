@@ -62,6 +62,7 @@ sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin 
 
 ---
 
+#### Getting SELKS
 #### StamusNetworks 
 * SELKS installation
 ```
@@ -70,7 +71,9 @@ cd SELKS/docker/
 ./easy-setup.sh
 sudo -E docker compose up -d
 ```
-#### Resources: [AttackDetection](https://github.com/ptresearch/AttackDetection)
+#### Resources:
+* [Docker](https://github.com/StamusNetworks/SELKS/wiki/Docker)
+* [AttackDetection](https://github.com/ptresearch/AttackDetection)
 
 
 Threat Hunting
@@ -98,8 +101,6 @@ Here is an extract of the dashboards list: SN-ALERTS, SN-ALL, SN-ANOMALY, SN-DHC
 
 Additional visualizations and dashboards are also available in the ``Events viewer`` (EveBox).
 
-Getting SELKS
-=============
 
 Prerequisites
 -------------
@@ -108,31 +109,12 @@ The minimal configuration for production usage is 2 cores and 9 Gb of memory. As
 and Elastisearch are multithreaded, the more cores you have the better it is.
 Regarding memory, the more traffic to monitor you have, the more getting some extra memory will be interesting.
 
-Docker
-------
-
-You can spin up SELKS on any Linux or Windows OSes in minutes via docker compose. See `Docker Installation <https://github.com/StamusNetworks/SELKS/wiki/Docker>`_.
-
-ISO
----
-
-For air gapped environement or full OS installation, see `SELKS ISO Setup <https://github.com/StamusNetworks/SELKS/wiki/Docker-ISO-setup>`_.
- 
 Usage and logon credentials
 ===========================
 
 You need to authenticate to access to the web interface(see the ``HTTPS access`` section below ). The default user/password is ``selks-user/selks-user`` (including through the Dashboards or Scirius desktop icons).
 You can change credentials and user settings by using the top left menu in Scirius.  
 
-For the ISO users
------------------
-
-Default OS user:
-
-* user: ``selks-user``
-* password: ``selks-user`` (password in Live mode is ``live``)
-
-The default root password is ``StamusNetworks``
 
 HTTPS access
 ============
