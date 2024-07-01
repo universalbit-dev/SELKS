@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Copyright(C) 2021, Stamus Networks
 # Written by Raphaël Brogat <rbrogat@stamus-networks.com> based on the work of Peter Manev <pmanev@stamus-networks.com>
@@ -399,7 +399,7 @@ function is_compose_installed(){
   elif [[ $composeV2 == *"Docker Compose version v2."* || $composeV2 == *"Docker Compose version 2."*  ]]; then
     composeV=( $composeV2 )
     echo "yes"
-  else 
+  else
     echo "no"
   fi
 }
@@ -414,7 +414,7 @@ function is_docker_availabale_for_user(){
 function test_docker(){
   hello=$(docker run --rm hello-world) || \
   echo "${red}-${reset} Docker test failed"
-  
+
   if [[ $hello == *"Hello from Docker"* ]]; then
     echo -e "${green}+${reset} Docker seems to be installed properly"
   else
@@ -603,10 +603,10 @@ echo -e "\n"
 load_docker_images_from_tar ${BASEDIR}/tar_images
 
 if [[ "${_arg_skip_checks}" == "off" ]] ; then
-  
+
   #############################
   #          DOCKER           #
-  #############################  
+  #############################
 
   if [[ $(is_docker_installed) == "yes" ]]; then
     echo -e "${green}+${reset} Docker installation found: $(docker -v)"
@@ -666,7 +666,7 @@ if [[ "${_arg_skip_checks}" == "off" ]] ; then
   #############################
   #         PORTAINER         #
   #############################
-  
+
   if $(docker ps | grep -q 'portainer'); then
     echo -e "  Found existing portainer installation, skipping...\n"
   else
@@ -691,7 +691,7 @@ if [[ "${_arg_skip_checks}" == "off" ]] ; then
         esac
     done
   fi
-  
+
 fi
 
 #############################
@@ -703,12 +703,12 @@ function check_scirius_key_cert(){
   # usage : check_scirius_key_cert [path_to_files] [filename_without_extension]
   # example : check_scirius_key_cert [path_to_files] [filename_without_extension]
   output=$(docker run --rm -it -v ${1}:/etc/nginx/ssl nginx /bin/bash -c "openssl x509 -in /etc/nginx/ssl/scirius.crt -pubkey -noout -outform pem | sha256sum; openssl pkey -in /etc/nginx/ssl/scirius.key -pubout -outform pem | sha256sum" || echo -e "${red}-${reset} Error while checking certificate against key")
-  
+
   SAVEIFS=$IFS   # Save current IFS
   IFS=$'\n'      # Change IFS to new line
   output=($output) # split to array $names
   IFS=$SAVEIFS   # Restore IFS
-  
+
   if [[ ${output[0]}==${output[1]} ]]; then
     echo -e "${green}+${reset} Certificate match private key"
     return 0
@@ -755,22 +755,23 @@ echo "COMPOSE_PROJECT_NAME=selks" > ${BASEDIR}/.env
 function getInterfaces {
   echo -e " Network interfaces detected:"
   intfnum=0
-  for interface in $(ls /sys/class/net); do echo "${intfnum}: ${interface}"; ((intfnum++)) ; done
-  
+  for interface in $(sudo docker run --net=host busybox ls /sys/class/net); do echo "${intfnum}: ${interface}"; ((intfnum++)) ; done
+
   echo -e "Please type in interface or space delimited interfaces below and hit \"Enter\"."
   echo -e "Choose the interface(s) that is (are) one the network(s) you want to monitor"
   echo -e "Example: eth1"
   echo -e "OR"
   echo -e "Example: eth1 eth2 eth3"
+  echo -e "If desired interface is not there, it can be a docker configuration issue. Please check your \"docker --net=host behavior\""
   echo -e "\nConfigure threat detection for INTERFACE(S): "
-  
+
   if [[ "${INTERFACES}" == "" ]] && [[ "${INTERACTIVE}" == "true" ]]; then
     read interfaces
   else
     echo "${INTERFACES}"
     interfaces=${INTERFACES}
   fi
-    
+
   echo -e "\nThe supplied network interface(s):  ${interfaces}"
   echo "";
   INTERFACE_EXISTS="YES"
@@ -780,7 +781,7 @@ function getInterfaces {
     INTERFACE_EXISTS="NO"
     exit 1
   fi
-  
+
   for interface in ${interfaces}
   do
     if ! cat /sys/class/net/${interface}/operstate > /dev/null 2>&1 ; then
@@ -791,7 +792,7 @@ function getInterfaces {
         echo -e "Please supply a correct/existing network interface or check your spelling.\n"
         INTERFACE_EXISTS="NO"
     fi
-    
+
   done
 }
 
@@ -883,7 +884,7 @@ fi
 
 if ! [ -z "${elastic_data_path}" ]; then
 
-  while ! [ -w "${elastic_data_path}" ]; do 
+  while ! [ -w "${elastic_data_path}" ]; do
     echo -e "\nYou don't seem to own write access to this directory\n"
     echo -e "You can specify a path where you want the data to be saved, or hit ENTER to use a [docker volume]."
     if [[ "${INTERACTIVE}" == "true" ]]; then
@@ -990,7 +991,7 @@ if [[ "${_arg_pull_containers}" == "on" ]]; then
   else
     docker compose pull || exit
   fi
-  
+
 
 fi
 

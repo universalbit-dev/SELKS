@@ -1,7 +1,7 @@
 #!/bin/bash
-
+echo "Using ES_HOST: $ES_HOST and ES_PORT: $ES_PORT"
 echo "Giving ES time to start..."
-until curl -sS "http://$ES_HOST:$ES_PORT/_cluster/health?wait_for_status=yellow" > /dev/null 2>&1
+until curl -sS "http://$ES_HOST:$ES_PORT/_cluster/health"
 do
     echo "Waiting for ES to start"
     sleep 3
@@ -20,11 +20,14 @@ done
 export ARKIME_ELASTICSEARCH="http://"$ES_HOST":"$ES_PORT
 
 if [ ! -f $ARKIMEDIR/etc/.initialized ]; then
+    echo "Initializing ES database..."
     echo INIT | $ARKIMEDIR/db/db.pl $ARKIME_ELASTICSEARCH init
     $ARKIMEDIR/bin/arkime_add_user.sh $ARKIME_ADMIN_USERNAME "SELKS Admin User" $ARKIME_ADMIN_PASSWORD --admin
     $ARKIMEDIR/bin/arkime_add_user.sh moloch moloch moloch --admin --webauth
     echo $ARKIME_VERSION > $ARKIMEDIR/etc/.initialized
+    echo UPGRADE | $ARKIMEDIR/db/db.pl http://$ES_HOST:$ES_PORT upgrade
 else
+    echo "ES database already initialized..."
     # possible update
     read old_ver < $ARKIMEDIR/etc/.initialized
     # detect the newer version
