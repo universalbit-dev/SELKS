@@ -66,7 +66,7 @@ jobs:
       
       -
         name: Build container image
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context : ./docker/Arkime
           file : ./docker/Arkime/Arkime.dockerfile
@@ -77,12 +77,4 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
       
-      -
-        # Temp fix
-        # https://github.com/docker/build-push-action/blob/master/docs/advanced/cache.md#github-cache
-        # https://github.com/docker/build-push-action/issues/252
-        # https://github.com/moby/buildkit/issues/1896
-        name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+     
