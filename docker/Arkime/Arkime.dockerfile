@@ -1,6 +1,6 @@
 
 
-FROM debian:bullseye as installer
+FROM debian:12.9 as installer
 
 # Declare args
 ARG ARKIME_VERSION=5.0.0
@@ -28,7 +28,7 @@ RUN $ARKIMEDIR/bin/arkime_update_geo.sh
 
 # add config
 
-FROM debian:bullseye as runner
+FROM debian:12.9 as runner
 
 # Declare args
 
