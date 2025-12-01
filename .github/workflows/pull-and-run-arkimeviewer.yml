@@ -1,16 +1,10 @@
 on:
   workflow_dispatch:
 
-# Minimal permissions required for checkout and reading GHCR packages
+# Minimal permissions for checkout and (optional) package access.
 permissions:
   contents: read
   packages: read
-
-env:
-  IMAGE: ghcr.io/universalbit-dev/arkimeviewer:snyk-fix-512a575e2bccee962042801ef03bb3d2
-  CONTAINER_NAME: arkimeviewer
-  HOST_PORT: 8443    
-  CONTAINER_PORT: 443
 
 jobs:
   pull-and-run:
@@ -18,32 +12,41 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (not strictly needed, but useful to have)
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # If the image is private, set a repository secret GHCR_PAT with a PAT that has read:packages.
-      # Use the expression syntax ${{ ... }} in the `if:` — secrets can't be referenced directly without it.
-      - name: Log in to GHCR (if GHCR_PAT secret is provided)
-        if: ${{ secrets.GHCR_PAT != '' }}
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
+      # If your image is private and you need to log into GHCR, uncomment the next step
+      # and add a repository secret named GHCR_PAT (PAT with read:packages).
+      # Using docker/login-action with the secret in `with:` is supported (do not use `if:` with an unwrapped `secrets`).
+      # - name: Log in to GHCR
+      #   uses: docker/login-action@v2
+      #   with:
+      #     registry: ghcr.io
+      #     username: ${{ github.actor }}
+      #     password: ${{ secrets.GHCR_PAT }}
 
-      - name: Ensure existing container is stopped and removed
+      - name: Pull and run Arkime Viewer
         run: |
-          if sudo docker ps -a --format '{{.Names}}' | grep -x "${{ env.CONTAINER_NAME }}" >/dev/null 2>&1; then
-            sudo docker rm -f "${{ env.CONTAINER_NAME }}" || true
+          set -euo pipefail
+
+          IMAGE="ghcr.io/universalbit-dev/arkimeviewer:snyk-fix-512a575e2bccee962042801ef03bb3d2"
+          CONTAINER_NAME="arkimeviewer"
+          HOST_PORT=8443
+          CONTAINER_PORT=443
+
+          echo "Stopping and removing any existing container named ${CONTAINER_NAME}..."
+          if sudo docker ps -a --format '{{.Names}}' | grep -x "${CONTAINER_NAME}" >/dev/null 2>&1; then
+            sudo docker rm -f "${CONTAINER_NAME}" || true
           fi
 
-      - name: Pull image
-        run: sudo docker pull "${{ env.IMAGE }}"
+          echo "Pulling ${IMAGE}..."
+          sudo docker pull "${IMAGE}"
 
-      - name: Start container
-        run: |
+          echo "Starting container ${CONTAINER_NAME} (host port ${HOST_PORT} -> container port ${CONTAINER_PORT})..."
           sudo docker run -d \
-            --name "${{ env.CONTAINER_NAME }}" \
-            -p "${{ env.HOST_PORT }}:${{ env.CONTAINER_PORT }}" \
+            --name "${CONTAINER_NAME}" \
+            -p "${HOST_PORT}:${CONTAINER_PORT}" \
             --restart unless-stopped \
-            "${{ env.IMAGE }}"
+            "${IMAGE}"
+
+          echo "Done."
