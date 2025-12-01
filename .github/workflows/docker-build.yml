@@ -1,3 +1,4 @@
+# Docker Build and Push workflow with pre-check and build-args for Arkime
 name: Docker Build and Push
 
 on:
@@ -9,6 +10,8 @@ on:
 env:
   OWNER: ${{ github.repository_owner }}
   VERSION: latest
+  ARKIME_VERSION: "5.0.0"     # adjust if upstream releases differ
+  UBUNTU_VERSION: "20.04"     # adjust if you need another ubuntu target
 
 permissions:
   contents: read
@@ -34,6 +37,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Show Arkime .deb URL (pre-check, non-fatal)
+        run: |
+          URL="https://s3.amazonaws.com/files.molo.ch/builds/ubuntu-${{ env.UBUNTU_VERSION }}/arkime_${{ env.ARKIME_VERSION }}-1_amd64.deb"
+          echo "Checking URL: $URL"
+          # Print headers (do not fail the job here — just debug)
+          curl -I --max-time 15 "$URL" || true
+
       - name: Build and push Arkime image
         uses: docker/build-push-action@v4
         with:
@@ -45,3 +55,6 @@ jobs:
             ghcr.io/${{ env.OWNER }}/arkimeviewer:${{ env.VERSION }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          build-args: |
+            ARKIME_VERSION=${{ env.ARKIME_VERSION }}
+            UBUNTU_VERSION=${{ env.UBUNTU_VERSION }}
