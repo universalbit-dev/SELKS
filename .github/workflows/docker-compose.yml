@@ -129,33 +129,31 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           LOG_SNIPPET="$(tail -n 200 compose_logs.txt 2>/dev/null || echo "No logs available")"
 
-          # Create a safe template (no GitHub expressions inside) using a single-quoted heredoc,
-          # then replace placeholders with shell variables. This avoids YAML parsing issues.
-          cat > "$PAGES_DIR/index.html" <<'INDEX_HTML'
-<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>SELKS Docker Compose smoke test</title></head>
-  <body>
-    <h1>SELKS Docker Compose smoke test</h1>
-    <p>Result: <strong>STATUS_PLACEHOLDER</strong></p>
-    <p>Workflow run: <a href="RUN_URL_PLACEHOLDER">Open run</a></p>
-    <h2>Dashboard snapshot</h2>
-    <p>If snapshot failed, the file may be empty or contain an error note.</p>
-    <iframe src="dashboard_snapshot.html" style="width:100%;height:600px;border:1px solid #ccc;"></iframe>
-    <h2>Compose logs (tail)</h2>
-    <pre>LOGS_PLACEHOLDER</pre>
-    <p>Full logs: <a href="compose_logs.txt">compose_logs.txt</a></p>
-  </body>
-</html>
-INDEX_HTML
+          # Create index.html without using a heredoc to avoid YAML parsing issues.
+          # Use printf with explicit lines so the workflow YAML validator doesn't choke on the literal HTML.
+          printf '%s\n' \
+            '<!doctype html>' \
+            '<html>' \
+            '  <head><meta charset="utf-8"><title>SELKS Docker Compose smoke test</title></head>' \
+            '  <body>' \
+            '    <h1>SELKS Docker Compose smoke test</h1>' \
+            "    <p>Result: <strong>${STATUS}</strong></p>" \
+            "    <p>Workflow run: <a href=\"${RUN_URL}\">Open run</a></p>" \
+            '    <h2>Dashboard snapshot</h2>' \
+            '    <p>If snapshot failed, the file may be empty or contain an error note.</p>' \
+            '    <iframe src="dashboard_snapshot.html" style="width:100%;height:600px;border:1px solid #ccc;"></iframe>' \
+            '    <h2>Compose logs (tail)</h2>' \
+            '    <pre>' > "$PAGES_DIR/index.html"
 
-          # Replace placeholders with actual values safely
-          sed -i "s|STATUS_PLACEHOLDER|${STATUS}|g" "$PAGES_DIR/index.html"
-          sed -i "s|RUN_URL_PLACEHOLDER|${RUN_URL}|g" "$PAGES_DIR/index.html"
+          # Append escaped logs
+          printf '%s\n' "$(printf '%s' "${LOG_SNIPPET}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" >> "$PAGES_DIR/index.html"
 
-          # Escape slashes and sed-delimiter metas in LOG_SNIPPET then replace
-          ESC_LOG="$(printf '%s' "${LOG_SNIPPET}" | sed -e 's/[\/&]/\\&/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-          sed -i "s|LOGS_PLACEHOLDER|${ESC_LOG}|g" "$PAGES_DIR/index.html"
+          # Finish the HTML file
+          printf '%s\n' \
+            '</pre>' \
+            '    <p>Full logs: <a href="compose_logs.txt">compose_logs.txt</a></p>' \
+            '  </body>' \
+            '</html>' >> "$PAGES_DIR/index.html"
 
           cp compose_logs.txt "$PAGES_DIR/compose_logs.txt" || true
           ls -la "$PAGES_DIR"
