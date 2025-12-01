@@ -71,6 +71,25 @@ jobs:
           echo "=== ssl listing ==="
           ls -la ssl || true
 
+      - name: Prepare host volume directories used by bind mounts
+        # Create any host directories docker-compose expects under docker/containers-data
+        run: |
+          set -e
+          BASE_DIR="docker/containers-data"
+          mkdir -p \
+            "$BASE_DIR/suricata/logrotate" \
+            "$BASE_DIR/suricata/run" \
+            "$BASE_DIR/suricata/rules" \
+            "$BASE_DIR/scirius/static" \
+            "$BASE_DIR/scirius/data" \
+            "$BASE_DIR/arkime/pcap" \
+            "$BASE_DIR/db/data" \
+            "$BASE_DIR/elastic/data" \
+            "$BASE_DIR/logstash/sincedb" || true
+          # Show what we created so logs help debugging
+          ls -la docker || true
+          ls -la "$BASE_DIR" || true
+
       - name: Start docker-compose stack (build & up)
         working-directory: docker
         env:
@@ -159,13 +178,13 @@ jobs:
           ls -la "$PAGES_DIR"
 
       - name: Upload Pages artifact
-        # Use upload-pages-artifact v3 to avoid older internal dependency on actions/upload-artifact@v3
-        uses: actions/upload-pages-artifact@v3
+        # Use upload-pages-artifact v2 to avoid older internal dependency on actions/upload-artifact@v3
+        uses: actions/upload-pages-artifact@v2
         with:
           path: pages-site
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v1
 
       - name: Tear down compose stack
         if: always()
