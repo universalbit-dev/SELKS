@@ -1,5 +1,3 @@
-
-
 FROM debian:bullseye as installer
 
 # Declare args
@@ -13,7 +11,6 @@ ENV UBUNTU_VERSION $UBUNTU_VERSION
 ENV ARKIME_DEB_PACKAGE $ARKIME_DEB_PACKAGE
 ENV ARKIMEDIR "/opt/arkime"
 
-
 # Install Arkime
 RUN apt-get update && apt-get install -y curl wget logrotate
 RUN mkdir -p /tmp  /suricata-logs
@@ -24,7 +21,6 @@ RUN apt-get install -y ./$ARKIME_DEB_PACKAGE
 
 RUN wget -q -O /opt/arkime/etc/oui.txt "https://www.wireshark.org/download/automated/data/manuf"
 RUN $ARKIMEDIR/bin/arkime_update_geo.sh
-
 
 # add config
 
@@ -38,8 +34,21 @@ ENV ARKIME_ADMIN_USERNAME "selks-user"
 ENV ARKIME_ADMIN_PASSWORD "selks-user"
 ENV ARKIME_HOSTNAME "arkime"
 ENV ARKIMEDIR "/opt/arkime"
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y libpcre3 libyaml-0-2 libssl3 libmagic1 curl libwww-perl libjson-perl
+# Update + install in one layer, use the libssl package present on bullseye,
+# avoid recommends and clean apt lists.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    libpcre3 \
+    libyaml-0-2 \
+    libssl1.1 \
+    libmagic1 \
+    curl \
+    libwww-perl \
+    libjson-perl \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=installer $ARKIMEDIR $ARKIMEDIR
 
 COPY start-arkimeviewer.sh /start-arkimeviewer.sh
