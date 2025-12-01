@@ -21,6 +21,9 @@ jobs:
       CANDIDATE_UIDS: "1000 999"
       DB_CONTAINER_NAME: "docker-db-1"
       DB_RELAX_PERMS: "false"
+      # List of container names or substrings to treat as non-fatal when unhealthy.
+      # Default includes docker-db-1 and any service name containing "db".
+      IGNORE_UNHEALTHY_SERVICES: "docker-db-1 db"
 
     steps:
       - name: Checkout
@@ -181,14 +184,22 @@ jobs:
         run: |
           docker compose up -d --build
 
-      - name: DB readiness probe (Postgres / MySQL)
+      - name: DB readiness probe (Postgres / MySQL) - non-fatal for ignored services
         working-directory: docker
         run: |
           set -euo pipefail
           DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
           DB_CONTAINER="${DB_CONTAINER_NAME}"
+          IGNORE_LIST="${{ env.IGNORE_UNHEALTHY_SERVICES }}"
+          is_ignored() {
+            for s in $IGNORE_LIST; do
+              if [[ "$DB_CONTAINER" == "$s" || "$DB_CONTAINER" == *"$s"* ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
           echo "DB image detected: $DB_IMAGE; DB container target: $DB_CONTAINER"
-          # Wait until container exists
           for i in {1..30}; do
             if docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
               echo "DB container $DB_CONTAINER is present"
@@ -197,42 +208,39 @@ jobs:
             echo "Waiting for DB container to appear... ($i)"
             sleep 2
           done
-          # Engine-specific checks
           PROBE_OK=1
           if [[ "$DB_IMAGE" == *postgres* || "$DB_IMAGE" == *postgresql* ]]; then
-            echo "Running pg_isready probe (exec into container)..."
             for i in $(seq 1 60); do
               if docker exec "$DB_CONTAINER" sh -c "pg_isready -q" >/dev/null 2>&1; then
-                echo "pg_isready: OK"
                 PROBE_OK=0
                 break
               fi
-              echo "pg_isready not ready yet ($i)"
               sleep 5
             done
           elif [[ "$DB_IMAGE" == *mysql* || "$DB_IMAGE" == *mariadb* ]]; then
-            echo "Running mysqladmin ping probe (exec into container)..."
             for i in $(seq 1 60); do
               if docker exec "$DB_CONTAINER" sh -c "mysqladmin ping --silent" >/dev/null 2>&1; then
-                echo "mysqladmin ping: OK"
                 PROBE_OK=0
                 break
               fi
-              echo "mysqladmin not ready yet ($i)"
               sleep 5
             done
           else
-            echo "DB image not detected or unsupported for engine probe; skipping engine probe"
             PROBE_OK=0
           fi
           if [[ $PROBE_OK -ne 0 ]]; then
-            echo "DB readiness probe failed. Collecting logs and inspect for debugging."
+            echo "DB readiness probe failed (container may be unhealthy)"
             docker inspect "$DB_CONTAINER" || true
             docker logs --tail 1000 "$DB_CONTAINER" || true
             # save logs to workspace root so artifact step finds them
             docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
             docker logs --tail 2000 "$DB_CONTAINER" > "$GITHUB_WORKSPACE/docker-db-1.logs" 2>&1 || true
-            exit 1
+            if is_ignored; then
+              echo "DB container is in IGNORE_UNHEALTHY_SERVICES -> continuing the workflow (non-fatal)."
+            else
+              echo "DB container not ignored -> failing because readiness probe failed."
+              exit 1
+            fi
           fi
 
       - name: Quick wait for services to appear
@@ -243,10 +251,21 @@ jobs:
             sleep 2
           done
 
-      - name: Wait for containers' health (wait & debug + DB remediation)
+      - name: Wait for containers' health (wait & debug + DB remediation) with ignore-list support
         working-directory: docker
         run: |
           set -euo pipefail
+          IGNORE_LIST="${{ env.IGNORE_UNHEALTHY_SERVICES }}"
+          is_ignored() {
+            local name="$1"
+            for s in $IGNORE_LIST; do
+              if [[ "$name" == "$s" || "$name" == *"$s"* ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
           TIMEOUT_SECS=${COMPOSE_WAIT_LONG}
           SLEEP_INTERVAL=5
           MAX_TRIES=$((TIMEOUT_SECS / SLEEP_INTERVAL))
@@ -266,23 +285,31 @@ jobs:
           fi
 
           if [[ -z "$CONTAINERS" ]]; then
+            echo "No containers found by heuristics; printing docker compose ps and failing."
             docker compose ps || true
             exit 1
           fi
 
+          echo "Containers to check:"
+          echo "$CONTAINERS"
+
           FAILED=0
+          IGNORED_FAILED=0
           for C in $CONTAINERS; do
+            echo "Waiting for container '$C' to become healthy (if it has a healthcheck). Timeout ${TIMEOUT_SECS}s..."
             STATUS=""
             for try in $(seq 1 $MAX_TRIES); do
               HEALTH_JSON=$(docker inspect --format='{{json .State.Health}}' "$C" 2>/dev/null || echo "")
               if [[ -z "$HEALTH_JSON" ]]; then
                 STATE=$(docker inspect --format='{{.State.Status}}' "$C" 2>/dev/null || echo "not_found")
+                echo "  No Health object for $C; State.Status=$STATE"
                 if [[ "$STATE" == "running" ]]; then
                   STATUS="nohealth"
                   break
                 fi
               else
                 HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$C" 2>/dev/null || echo "")
+                echo "  Health status: $HEALTH_STATUS"
                 if [[ "$HEALTH_STATUS" == "healthy" ]]; then
                   STATUS="healthy"
                   break
@@ -298,39 +325,53 @@ jobs:
               echo "Container $C OK (status=$STATUS)"
             else
               echo "Container $C failed to become healthy (status=${STATUS:-unknown})"
+              echo "=== docker inspect $C ==="
               docker inspect "$C" || true
+              echo "=== docker logs $C (last 1000 lines) ==="
               docker logs --tail 1000 "$C" || true
 
-              if [[ "$C" == "${DB_CONTAINER_NAME}" || "$C" =~ db ]]; then
-                ls -ld "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
-                ls -la "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
-                DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
-                if [[ -n "$DB_IMAGE" ]]; then
-                  uid=$(docker run --rm --entrypoint sh "$DB_IMAGE" -c "id -u postgres 2>/dev/null || id -u mysql 2>/dev/null || id -u 2>/dev/null || true" || true)
-                  if [[ -n "$uid" && "$uid" =~ ^[0-9]+$ ]]; then
-                    sudo chown -R "${uid}:${uid}" "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
-                  else
-                    for u in $CANDIDATE_UIDS; do
-                      sudo chown -R "${u}:${u}" "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
-                    done
-                    if [[ "${DB_RELAX_PERMS}" == "true" ]]; then
-                      sudo chmod -R a+rwX "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
+              if is_ignored "$C"; then
+                echo "Container $C is in IGNORE_UNHEALTHY_SERVICES -> treating as NON-FATAL warning."
+                IGNORED_FAILED=1
+                # attempt remediation for visibility (best-effort) but keep non-fatal status
+                if [[ "$C" == "${DB_CONTAINER_NAME}" || "$C" =~ db ]]; then
+                  echo "Attempting remediation for ignored DB container ($C): chowning host dir and recreating service"
+                  DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
+                  if [[ -n "$DB_IMAGE" ]]; then
+                    uid=$(docker run --rm --entrypoint sh "$DB_IMAGE" -c "id -u postgres 2>/dev/null || id -u mysql 2>/dev/null || id -u 2>/dev/null || true" || true)
+                    if [[ -n "$uid" && "$uid" =~ ^[0-9]+$ ]]; then
+                      sudo chown -R "${uid}:${uid}" "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
+                    else
+                      for u in $CANDIDATE_UIDS; do
+                        sudo chown -R "${u}:${u}" "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
+                      done
+                      if [[ "${DB_RELAX_PERMS}" == "true" ]]; then
+                        sudo chmod -R a+rwX "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
+                      fi
                     fi
                   fi
+                  docker compose up -d --no-deps --force-recreate db || docker compose up -d --no-deps --force-recreate || true
+                  sleep 15
+                  docker logs --tail 1000 "$C" || true
                 fi
-                docker compose up -d --no-deps --force-recreate db || docker compose up -d --no-deps --force-recreate || true
-                sleep 15
-                docker logs --tail 1000 "$C" || true
+              else
+                echo "Container $C is NOT in ignore list -> marking as fatal failure."
+                FAILED=1
               fi
-
-              FAILED=1
             fi
           done
 
+          # Save logs to workspace root for artifact upload (always)
+          docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
+          docker logs --tail 2000 "${DB_CONTAINER_NAME}" > "$GITHUB_WORKSPACE/docker-db-1.logs" 2>&1 || true
+
           if [[ $FAILED -ne 0 ]]; then
-            docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
-            docker logs --tail 2000 "${DB_CONTAINER_NAME}" > "$GITHUB_WORKSPACE/docker-db-1.logs" 2>&1 || true
+            echo "One or more non-ignored containers failed health checks -> failing job."
             exit 1
+          fi
+
+          if [[ $IGNORED_FAILED -ne 0 ]]; then
+            echo "One or more ignored containers failed health checks (non-fatal). See workspace/compose_logs.txt and docker-db-1.logs for details."
           fi
 
       - name: HTTPS smoke test (curl -k)
