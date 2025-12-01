@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-and-test-and-pages:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -93,17 +93,99 @@ jobs:
       - name: Start docker-compose stack (build & up)
         working-directory: docker
         env:
-          COMPOSE_HTTP_TIMEOUT: 200
+          COMPOSE_HTTP_TIMEOUT: 300
         run: |
           docker compose up -d --build
 
-      - name: Wait for services to start
+      - name: Wait for services to appear (quick loop)
         working-directory: docker
         run: |
-          for i in {1..30}; do
+          for i in {1..40}; do
             docker compose ps || true
             sleep 2
           done
+
+      - name: Wait for containers' health (wait & debug)
+        working-directory: docker
+        run: |
+          set -euo pipefail
+          # Adjust these names if your compose project name differs. The logs showed container names like 'docker-db-1'.
+          # We attempt to detect containers created by compose in this project and wait for their health status.
+          echo "Listing containers:"
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
+          # Configure timeout (seconds) to wait per container
+          TIMEOUT_SECS=240
+          SLEEP_INTERVAL=3
+          MAX_TRIES=$((TIMEOUT_SECS / SLEEP_INTERVAL))
+
+          # Build list of containers started by the compose project (filter by network prefix docker_ if present)
+          # Fallback: use compose ps --services to map to container names
+          CONTAINERS=$(docker ps --filter "network=docker_default" --format '{{.Names}}' || true)
+          if [[ -z "$CONTAINERS" ]]; then
+            # Fallback: list all containers whose name contains 'docker-' prefix (common for compose project named docker)
+            CONTAINERS=$(docker ps --format '{{.Names}}' | grep -E 'docker-' || true)
+          fi
+
+          if [[ -z "$CONTAINERS" ]]; then
+            echo "No containers found by heuristics; printing docker compose ps and failing."
+            docker compose ps || true
+            exit 1
+          fi
+
+          echo "Containers to check:"
+          echo "$CONTAINERS"
+
+          FAILED=0
+          for C in $CONTAINERS; do
+            echo "Waiting for container '$C' to become healthy (if it has a healthcheck). Timeout ${TIMEOUT_SECS}s..."
+            STATUS=""
+            for try in $(seq 1 $MAX_TRIES); do
+              # If inspect fails, container may not be up yet; continue
+              STATUS=$(docker inspect --format='{{json .State.Health}}' "$C" 2>/dev/null || echo "")
+              if [[ -z "$STATUS" ]]; then
+                # No health object; examine .State.Status to see if running
+                STATE=$(docker inspect --format='{{.State.Status}}' "$C" 2>/dev/null || echo "not_found")
+                echo "  No Health object for $C; State.Status=$STATE"
+                # If container is running, treat it as OK (no healthcheck)
+                if [[ "$STATE" == "running" ]]; then
+                  echo "  $C is running and has no healthcheck -> skipping health waits"
+                  STATUS="nohealth"
+                  break
+                fi
+              else
+                # parse Health.Status value by inspecting the Health JSON
+                HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$C" 2>/dev/null || echo "")
+                echo "  Health status: $HEALTH_STATUS"
+                if [[ "$HEALTH_STATUS" == "healthy" ]]; then
+                  STATUS="healthy"
+                  break
+                fi
+                if [[ "$HEALTH_STATUS" == "unhealthy" ]]; then
+                  STATUS="unhealthy"
+                  # continue to allow retries in case it recovers
+                fi
+              fi
+              sleep $SLEEP_INTERVAL
+            done
+
+            if [[ "$STATUS" == "healthy" || "$STATUS" == "nohealth" ]]; then
+              echo "Container $C OK (status=$STATUS)"
+            else
+              echo "Container $C failed to become healthy (status=${STATUS:-unknown})"
+              echo "=== docker inspect $C ==="
+              docker inspect "$C" || true
+              echo "=== docker logs $C (last 500 lines) ==="
+              docker logs --tail 500 "$C" || true
+              FAILED=1
+            fi
+          done
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo "One or more containers failed health checks. See logs above."
+            # Optional: save compose logs for upload (compose_logs.txt)
+            docker compose logs --no-color > compose_logs.txt || true
+            exit 1
+          fi
 
       - name: HTTPS smoke test (curl -k)
         id: smoke
@@ -111,14 +193,14 @@ jobs:
         run: |
           set -e
           RESULT=1
-          for i in {1..15}; do
+          for i in {1..20}; do
             if curl -k --silent --show-error --fail https://localhost:443/ -I; then
               echo "ok" > ./smoke_result.txt
               RESULT=0
               break
             fi
             echo "Waiting for HTTPS... ($i)"
-            sleep 2
+            sleep 3
           done
           if [[ $RESULT -ne 0 ]]; then
             echo "fail" > ./smoke_result.txt
