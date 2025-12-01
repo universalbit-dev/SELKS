@@ -1,0 +1,163 @@
+name: Docker Compose CI (Build Dashboard, HTTPS smoke test + Pages)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-test-and-pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Build frontend (if present) so the dashboard image contains latest assets
+      - name: Set up Node.js (for frontend build)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies and build (if package.json exists)
+        run: |
+          if [[ -f package.json ]]; then
+            echo "Found package.json — installing and building"
+            npm ci
+            if npm run | grep -q "build"; then
+              npm run build
+            else
+              echo "No build script present; ensure dist/ exists or adjust Dockerfile.dashboard"
+            fi
+          else
+            echo "No package.json — skipping frontend build"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Ensure docker compose plugin exists
+        run: |
+          if ! docker compose version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y docker-compose-plugin
+          fi
+          docker compose version
+
+      - name: Make scripts executable
+        run: chmod +x ./scripts/*.sh || true
+
+      - name: Generate self-signed SSL certs for tests
+        run: |
+          mkdir -p ssl
+          if [[ -x ./scripts/generate_ssl.sh ]]; then
+            ./scripts/generate_ssl.sh --out-dir ssl --force
+          else
+            openssl req -nodes -new -x509 -keyout ssl/private-key.pem -out ssl/certificate.pem -days 365 -subj "/CN=localhost"
+            chmod 600 ssl/private-key.pem
+          fi
+
+      - name: Show compose, build artifacts & SSL debug
+        run: |
+          echo "=== docker/docker-compose.yml ==="
+          sed -n '1,300p' docker/docker-compose.yml || true
+          echo "=== dist listing ==="
+          ls -la dist || echo "dist not present"
+          echo "=== ssl listing ==="
+          ls -la ssl || true
+
+      - name: Start docker-compose stack (build & up)
+        working-directory: docker
+        env:
+          COMPOSE_HTTP_TIMEOUT: 200
+        run: |
+          # Force a rebuild so the dashboard image picks up new dist/ if present
+          docker compose up -d --build
+
+      - name: Wait for services to start
+        working-directory: docker
+        run: |
+          # Wait up to ~60s for containers to appear healthy / running
+          for i in {1..30}; do
+            docker compose ps || true
+            sleep 2
+          done
+
+      - name: HTTPS smoke test (curl -k)
+        id: smoke
+        working-directory: docker
+        run: |
+          set -e
+          RESULT=1
+          for i in {1..15}; do
+            if curl -k --silent --show-error --fail https://localhost:443/ -I; then
+              echo "ok" > ./smoke_result.txt
+              RESULT=0
+              break
+            fi
+            echo "Waiting for HTTPS... ($i)"
+            sleep 2
+          done
+          if [[ $RESULT -ne 0 ]]; then
+            echo "fail" > ./smoke_result.txt
+            docker compose logs --no-color > ./compose_logs.txt || true
+            exit 1
+          fi
+
+      - name: Snapshot dashboard HTML (for Pages visualization)
+        working-directory: docker
+        run: |
+          # Try to GET the dashboard root (ignore cert validity)
+          mkdir -p ../pages-site
+          if curl -k --max-time 10 --silent --show-error https://localhost:443/ -o ../pages-site/dashboard_snapshot.html; then
+            echo "Saved dashboard snapshot to pages-site/dashboard_snapshot.html"
+          else
+            echo "<!-- snapshot failed -->" > ../pages-site/dashboard_snapshot.html || true
+          fi
+
+      - name: Collect logs & create pages site
+        working-directory: docker
+        run: |
+          PAGES_DIR=../pages-site
+          mkdir -p "$PAGES_DIR"
+          STATUS=$(cat ./smoke_result.txt || echo "unknown")
+          # Create simple index referencing the snapshot and logs
+          cat > "$PAGES_DIR/index.html" <<HTML
+<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>SELKS Docker Compose smoke test</title></head>
+  <body>
+    <h1>SELKS Docker Compose smoke test</h1>
+    <p>Result: <strong>${STATUS}</strong></p>
+    <p>Workflow run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open run</a></p>
+    <h2>Dashboard snapshot</h2>
+    <p>If snapshot failed, the file may be empty or contain an error note.</p>
+    <iframe src="dashboard_snapshot.html" style="width:100%;height:600px;border:1px solid #ccc;"></iframe>
+    <h2>Compose logs (tail)</h2>
+    <pre>$(tail -n 200 compose_logs.txt 2>/dev/null || echo "No logs available")</pre>
+    <p>Full logs: <a href="compose_logs.txt">compose_logs.txt</a></p>
+  </body>
+</html>
+HTML
+          cp compose_logs.txt "$PAGES_DIR/compose_logs.txt" || true
+          ls -la "$PAGES_DIR"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: pages-site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v1
+
+      - name: Tear down compose stack
+        if: always()
+        working-directory: docker
+        run: |
+          docker compose down --volumes --remove-orphans || true
