@@ -178,13 +178,13 @@ jobs:
           ls -la "$PAGES_DIR"
 
       - name: Upload Pages artifact
-        # Use upload-pages-artifact v2 to avoid older internal dependency on actions/upload-artifact@v3
-        uses: actions/upload-pages-artifact@v2
+        # Use versions that do not depend on actions/upload-artifact@v3
+        uses: actions/upload-pages-artifact@v3
         with:
           path: pages-site
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v2
 
       - name: Tear down compose stack
         if: always()
