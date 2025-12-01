@@ -19,7 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Build frontend (if present) so the dashboard image contains latest assets
       - name: Set up Node.js (for frontend build)
         uses: actions/setup-node@v4
         with:
@@ -77,13 +76,11 @@ jobs:
         env:
           COMPOSE_HTTP_TIMEOUT: 200
         run: |
-          # Force a rebuild so the dashboard image picks up new dist/ if present
           docker compose up -d --build
 
       - name: Wait for services to start
         working-directory: docker
         run: |
-          # Wait up to ~60s for containers to appear healthy / running
           for i in {1..30}; do
             docker compose ps || true
             sleep 2
@@ -113,7 +110,6 @@ jobs:
       - name: Snapshot dashboard HTML (for Pages visualization)
         working-directory: docker
         run: |
-          # Try to GET the dashboard root (ignore cert validity)
           mkdir -p ../pages-site
           if curl -k --max-time 10 --silent --show-error https://localhost:443/ -o ../pages-site/dashboard_snapshot.html; then
             echo "Saved dashboard snapshot to pages-site/dashboard_snapshot.html"
@@ -127,24 +123,32 @@ jobs:
           PAGES_DIR=../pages-site
           mkdir -p "$PAGES_DIR"
           STATUS=$(cat ./smoke_result.txt || echo "unknown")
-          # Create simple index referencing the snapshot and logs
-          cat > "$PAGES_DIR/index.html" <<HTML
+          # create a simple index; avoid unescaped indentation issues by using EOF marker at column 0
+          cat > "$PAGES_DIR/index.html" <<'INDEX_HTML'
 <!doctype html>
 <html>
   <head><meta charset="utf-8"><title>SELKS Docker Compose smoke test</title></head>
   <body>
     <h1>SELKS Docker Compose smoke test</h1>
-    <p>Result: <strong>${STATUS}</strong></p>
-    <p>Workflow run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open run</a></p>
+    <p>Result: <strong>STATUS_PLACEHOLDER</strong></p>
+    <p>Workflow run: <a href="RUN_URL_PLACEHOLDER">Open run</a></p>
     <h2>Dashboard snapshot</h2>
     <p>If snapshot failed, the file may be empty or contain an error note.</p>
     <iframe src="dashboard_snapshot.html" style="width:100%;height:600px;border:1px solid #ccc;"></iframe>
     <h2>Compose logs (tail)</h2>
-    <pre>$(tail -n 200 compose_logs.txt 2>/dev/null || echo "No logs available")</pre>
+    <pre>LOGS_PLACEHOLDER</pre>
     <p>Full logs: <a href="compose_logs.txt">compose_logs.txt</a></p>
   </body>
 </html>
-HTML
+INDEX_HTML
+          # fill placeholders safely using sed (avoid YAML interpolation issues)
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          LOG_SNIPPET="$(tail -n 200 compose_logs.txt 2>/dev/null || echo "No logs available")"
+          sed -i "s|STATUS_PLACEHOLDER|${STATUS}|g" "$PAGES_DIR/index.html"
+          sed -i "s|RUN_URL_PLACEHOLDER|${RUN_URL}|g" "$PAGES_DIR/index.html"
+          # escape slashes in LOG_SNIPPET for sed replacement
+          ESC_LOG="$(printf '%s' "$LOG_SNIPPET" | sed -e 's/[\/&]/\\&/g')"
+          sed -i "s|LOGS_PLACEHOLDER|${ESC_LOG}|g" "$PAGES_DIR/index.html"
           cp compose_logs.txt "$PAGES_DIR/compose_logs.txt" || true
           ls -la "$PAGES_DIR"
 
