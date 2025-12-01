@@ -159,7 +159,8 @@ jobs:
           ls -la "$PAGES_DIR"
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v1
+        # Use upload-pages-artifact v2 to avoid older internal dependency on actions/upload-artifact@v3
+        uses: actions/upload-pages-artifact@v2
         with:
           path: pages-site
 
