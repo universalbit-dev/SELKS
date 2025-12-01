@@ -1,0 +1,34 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  pull-and-run:
+    name: Pull and run Arkime Viewer
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/universalbit-dev/arkimeviewer:snyk-fix-512a575e2bccee962042801ef03bb3d2
+      CONTAINER_NAME: arkimeviewer
+      HOST_PORT: 4433   
+      CONTAINER_PORT: 443
+    steps:
+      - name: Checkout (not strictly needed but good practice)
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR (if image is private)
+        if: secrets.GHCR_PAT != ''
+        run: echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Ensure any existing container is stopped and removed
+        run: |
+          sudo docker ps -a --format '{{.Names}}' | grep -x "${CONTAINER_NAME}" && sudo docker rm -f "${CONTAINER_NAME}" || true
+
+      - name: Pull image
+        run: sudo docker pull "${IMAGE}"
+
+      - name: Start container
+        run: |
+          sudo docker run -d \
+            --name "${CONTAINER_NAME}" \
+            -p "${HOST_PORT}:${CONTAINER_PORT}" \
+            --restart unless-stopped \
+            "${IMAGE}"
