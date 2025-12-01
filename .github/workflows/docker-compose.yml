@@ -108,7 +108,6 @@ jobs:
           set -euo pipefail
           COMPOSE_FILE="docker/docker-compose.yml"
           DB_SERVICE=""
-          # Try to find a service name with db/mysql/postgres/mariadb/database in it
           services=$(awk '/^[[:space:]]*services:/ {in_s=1; next} in_s && /^[[:space:]]*[a-zA-Z0-9_-]+:/ {gsub(/^[[:space:]]*/, ""); print; }' "$COMPOSE_FILE" | sed 's/://g' || true)
           for s in $services; do
             if echo "$s" | grep -Eqi 'db|mysql|postgres|mariadb|database'; then
@@ -116,16 +115,13 @@ jobs:
               break
             fi
           done
-          # fallback: try exact 'db' service
           if [[ -z "$DB_SERVICE" ]]; then
             if echo "$services" | grep -q '^db$'; then
               DB_SERVICE="db"
             fi
           fi
-          # If still empty, pick first service that contains 'mysql' or 'postgres' in its image later
           IMAGE=""
           if [[ -n "$DB_SERVICE" ]]; then
-            # Extract image line under the service block
             IMAGE=$(awk -v svc="$DB_SERVICE" '
               BEGIN{found=0}
               /^\s*services\s*:/ {in_services=1; next}
@@ -135,17 +131,15 @@ jobs:
                 gsub(/^[[:space:]]*image:[[:space:]]*/, ""); print; exit
               }' "$COMPOSE_FILE" || true)
           fi
-          # If image empty, attempt to guess by scanning all image: lines for mysql/postgres/mariadb
           if [[ -z "$IMAGE" ]]; then
             IMAGE=$(awk '/image:/ {gsub(/^[[:space:]]*image:[[:space:]]*/, ""); print}' "$COMPOSE_FILE" | grep -E 'mysql|mariadb|postgres' | head -n1 || true)
           fi
-          # export results for next steps
           echo "db_service=${DB_SERVICE:-}" >> "$GITHUB_OUTPUT" || true
           echo "db_image=${IMAGE:-}" >> "$GITHUB_OUTPUT" || true
           echo "Detected DB service: ${DB_SERVICE:-<none>}"
           echo "Detected DB image: ${IMAGE:-<none>}"
 
-      - name: Determine DB user UID from image and chown host DB dir (no wide chmod)
+      - name: Determine DB user UID from image and chown host DB dir (no wide chmod by default)
         run: |
           set -euo pipefail
           DB_SERVICE="${{ steps.detect_db.outputs.db_service || '' }}"
@@ -158,14 +152,11 @@ jobs:
           resolved_gid=""
           if [[ -n "$DB_IMAGE" ]]; then
             echo "Attempting to detect DB user uid/gid by running a temporary container from image: $DB_IMAGE"
-            # Try to run id commands inside a lightweight shell; some images may not have 'id' or 'sh'.
-            # We'll try common user names first (postgres, mysql, mariadb) and fallback to 'id -u' if available.
             for user in postgres mysql mariadb; do
               echo "Trying id for user '$user'..."
               out=$(docker run --rm --entrypoint sh --workdir / -v /etc/passwd:/etc/passwd:ro "$DB_IMAGE" -c "id -u $user 2>/dev/null || true") || out=""
               if [[ -n "$out" && "$out" =~ ^[0-9]+$ ]]; then
                 resolved_uid="$out"
-                # try gid
                 g=$(docker run --rm --entrypoint sh --workdir / "$DB_IMAGE" -c "id -g $user 2>/dev/null || true") || g=""
                 if [[ -n "$g" && "$g" =~ ^[0-9]+$ ]]; then
                   resolved_gid="$g"
@@ -176,7 +167,6 @@ jobs:
             done
 
             if [[ -z "$resolved_uid" ]]; then
-              # Try retrieving UID for the default user (id -u)
               echo "Trying to run 'id -u' in container to get default user uid..."
               out=$(docker run --rm --entrypoint sh --workdir / "$DB_IMAGE" -c "id -u 2>/dev/null || true") || out=""
               if [[ -n "$out" && "$out" =~ ^[0-9]+$ ]]; then
@@ -190,7 +180,6 @@ jobs:
             fi
           fi
 
-          # If still not found, try candidate UIDs
           if [[ -z "$resolved_uid" ]]; then
             echo "Could not detect UID from image. Trying fallback candidate UIDs: $CANDIDATE_UIDS"
             for uid in $CANDIDATE_UIDS; do
@@ -307,11 +296,9 @@ jobs:
                 ls -la "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
                 echo "Attempting remediation: determine UID from image and chown host dir, then recreate DB service"
 
-                # try determine image again
                 DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
                 if [[ -n "$DB_IMAGE" ]]; then
                   echo "DB image (remediation): $DB_IMAGE"
-                  # attempt to detect uid again
                   uid=$(docker run --rm --entrypoint sh "$DB_IMAGE" -c "id -u postgres 2>/dev/null || id -u mysql 2>/dev/null || id -u 2>/dev/null || true" || true)
                   if [[ -n "$uid" && "$uid" =~ ^[0-9]+$ ]]; then
                     echo "Remediation found uid: $uid"
@@ -341,8 +328,9 @@ jobs:
 
           if [[ $FAILED -ne 0 ]]; then
             echo "One or more containers failed health checks. Saving compose logs for debugging."
-            docker compose logs --no-color > compose_logs.txt || true
-            docker logs --tail 2000 "${DB_CONTAINER_NAME}" > docker-db-1.logs 2>&1 || true
+            # Write logs to workspace root so the upload-artifact step can find them
+            docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
+            docker logs --tail 2000 "${DB_CONTAINER_NAME}" > "$GITHUB_WORKSPACE/docker-db-1.logs" 2>&1 || true
             exit 1
           fi
 
@@ -363,7 +351,8 @@ jobs:
           done
           if [[ $RESULT -ne 0 ]]; then
             echo "fail" > ./smoke_result.txt
-            docker compose logs --no-color > compose_logs.txt || true
+            # ensure compose logs are saved to workspace root
+            docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
             exit 1
           fi
 
@@ -384,7 +373,7 @@ jobs:
           mkdir -p "$PAGES_DIR"
           STATUS=$(cat ./smoke_result.txt || echo "unknown")
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          LOG_SNIPPET="$(tail -n 200 compose_logs.txt 2>/dev/null || echo "No logs available")"
+          LOG_SNIPPET="$(tail -n 200 "$GITHUB_WORKSPACE/compose_logs.txt" 2>/dev/null || echo "No logs available")"
           printf '%s\n' \
             '<!doctype html>' \
             '<html>' \
@@ -404,8 +393,9 @@ jobs:
             '    <p>Full logs: <a href="compose_logs.txt">compose_logs.txt</a></p>' \
             '  </body>' \
             '</html>' >> "$PAGES_DIR/index.html"
-          cp compose_logs.txt "$PAGES_DIR/compose_logs.txt" || true
-          cp docker-db-1.logs "$PAGES_DIR/docker-db-1.logs" || true
+          # copy workspace-root logs into pages site for convenience (best-effort)
+          cp "$GITHUB_WORKSPACE/compose_logs.txt" "$PAGES_DIR/compose_logs.txt" || true
+          cp "$GITHUB_WORKSPACE/docker-db-1.logs" "$PAGES_DIR/docker-db-1.logs" || true
           ls -la "$PAGES_DIR"
 
       - name: Upload Pages artifact
