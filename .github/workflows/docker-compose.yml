@@ -16,15 +16,10 @@ jobs:
     timeout-minutes: 90
 
     env:
-      # Tunables
-      COMPOSE_WAIT_SHORT: "120"   # seconds for initial quick waits
-      COMPOSE_WAIT_LONG: "600"    # seconds for container health waits
+      COMPOSE_WAIT_LONG: "600"
       DB_BIND_DIR: "docker/containers-data/db/data"
-      # Candidate UIDs/GIDs to attempt for common DB images (fallback)
       CANDIDATE_UIDS: "1000 999"
-      # Name of DB container observed in logs; used for targeted diagnostics/remediation
       DB_CONTAINER_NAME: "docker-db-1"
-      # If true, fallback to chmod -R a+rwX when ownership remediation fails (disabled by default)
       DB_RELAX_PERMS: "false"
 
     steps:
@@ -39,15 +34,10 @@ jobs:
       - name: Install frontend dependencies and build (if package.json exists)
         run: |
           if [[ -f package.json ]]; then
-            echo "Found package.json — installing and building"
             npm ci
             if npm run | grep -q "build"; then
               npm run build
-            else
-              echo "No build script present; ensure dist/ exists or adjust Dockerfile.dashboard"
             fi
-          else
-            echo "No package.json — skipping frontend build"
           fi
 
       - name: Set up Docker Buildx
@@ -97,9 +87,7 @@ jobs:
             "$BASE_DIR/db/data" \
             "$BASE_DIR/elastic/data" \
             "$BASE_DIR/logstash/sincedb" || true
-          echo "Contents of docker/:"
           ls -la docker || true
-          echo "Contents of docker/containers-data/:"
           ls -la docker/containers-data || true
 
       - name: Detect DB service and image (best-effort)
@@ -142,18 +130,13 @@ jobs:
       - name: Determine DB user UID from image and chown host DB dir (no wide chmod by default)
         run: |
           set -euo pipefail
-          DB_SERVICE="${{ steps.detect_db.outputs.db_service || '' }}"
           DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
           HOST_DB_DIR="$GITHUB_WORKSPACE/${DB_BIND_DIR}"
           mkdir -p "$HOST_DB_DIR" || true
-          echo "Host DB dir: $HOST_DB_DIR"
-          echo "Detected DB service: '$DB_SERVICE'; detected DB image: '$DB_IMAGE'"
           resolved_uid=""
           resolved_gid=""
           if [[ -n "$DB_IMAGE" ]]; then
-            echo "Attempting to detect DB user uid/gid by running a temporary container from image: $DB_IMAGE"
             for user in postgres mysql mariadb; do
-              echo "Trying id for user '$user'..."
               out=$(docker run --rm --entrypoint sh --workdir / -v /etc/passwd:/etc/passwd:ro "$DB_IMAGE" -c "id -u $user 2>/dev/null || true") || out=""
               if [[ -n "$out" && "$out" =~ ^[0-9]+$ ]]; then
                 resolved_uid="$out"
@@ -161,13 +144,10 @@ jobs:
                 if [[ -n "$g" && "$g" =~ ^[0-9]+$ ]]; then
                   resolved_gid="$g"
                 fi
-                echo "Found UID for user $user: $resolved_uid (GID: ${resolved_gid:-<none>})"
                 break
               fi
             done
-
             if [[ -z "$resolved_uid" ]]; then
-              echo "Trying to run 'id -u' in container to get default user uid..."
               out=$(docker run --rm --entrypoint sh --workdir / "$DB_IMAGE" -c "id -u 2>/dev/null || true") || out=""
               if [[ -n "$out" && "$out" =~ ^[0-9]+$ ]]; then
                 resolved_uid="$out"
@@ -175,29 +155,20 @@ jobs:
                 if [[ -n "$g" && "$g" =~ ^[0-9]+$ ]]; then
                   resolved_gid="$g"
                 fi
-                echo "Found default UID: $resolved_uid (GID: ${resolved_gid:-<none>})"
               fi
             fi
           fi
-
           if [[ -z "$resolved_uid" ]]; then
-            echo "Could not detect UID from image. Trying fallback candidate UIDs: $CANDIDATE_UIDS"
             for uid in $CANDIDATE_UIDS; do
-              echo "Attempting chown to ${uid}:${uid} for $HOST_DB_DIR (best-effort)..."
               sudo chown -R "${uid}:${uid}" "$HOST_DB_DIR" && resolved_uid="$uid" && resolved_gid="$uid" && break || true
             done
           fi
-
           if [[ -n "$resolved_uid" ]]; then
-            echo "Applying ownership ${resolved_uid}:${resolved_gid:-$resolved_uid} to $HOST_DB_DIR"
             sudo chown -R "${resolved_uid}:${resolved_gid:-$resolved_uid}" "$HOST_DB_DIR" || true
-            echo "Ownership now:"
             ls -ld "$HOST_DB_DIR" || true
-            ls -la "$(dirname "$HOST_DB_DIR")" || true
           else
-            echo "WARNING: Could not determine a UID to chown to. Will NOT relax permissions unless DB_RELAX_PERMS=true"
+            echo "Could not determine UID to chown to. Will NOT relax permissions unless DB_RELAX_PERMS=true"
             if [[ "${DB_RELAX_PERMS}" == "true" ]]; then
-              echo "DB_RELAX_PERMS=true: relaxing permissions as last resort"
               sudo chmod -R a+rwX "$HOST_DB_DIR" || true
             fi
             ls -ld "$HOST_DB_DIR" || true
@@ -210,11 +181,64 @@ jobs:
         run: |
           docker compose up -d --build
 
+      - name: DB readiness probe (Postgres / MySQL)
+        working-directory: docker
+        run: |
+          set -euo pipefail
+          DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
+          DB_CONTAINER="${DB_CONTAINER_NAME}"
+          echo "DB image detected: $DB_IMAGE; DB container target: $DB_CONTAINER"
+          # Wait until container exists
+          for i in {1..30}; do
+            if docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
+              echo "DB container $DB_CONTAINER is present"
+              break
+            fi
+            echo "Waiting for DB container to appear... ($i)"
+            sleep 2
+          done
+          # Engine-specific checks
+          PROBE_OK=1
+          if [[ "$DB_IMAGE" == *postgres* || "$DB_IMAGE" == *postgresql* ]]; then
+            echo "Running pg_isready probe (exec into container)..."
+            for i in $(seq 1 60); do
+              if docker exec "$DB_CONTAINER" sh -c "pg_isready -q" >/dev/null 2>&1; then
+                echo "pg_isready: OK"
+                PROBE_OK=0
+                break
+              fi
+              echo "pg_isready not ready yet ($i)"
+              sleep 5
+            done
+          elif [[ "$DB_IMAGE" == *mysql* || "$DB_IMAGE" == *mariadb* ]]; then
+            echo "Running mysqladmin ping probe (exec into container)..."
+            for i in $(seq 1 60); do
+              if docker exec "$DB_CONTAINER" sh -c "mysqladmin ping --silent" >/dev/null 2>&1; then
+                echo "mysqladmin ping: OK"
+                PROBE_OK=0
+                break
+              fi
+              echo "mysqladmin not ready yet ($i)"
+              sleep 5
+            done
+          else
+            echo "DB image not detected or unsupported for engine probe; skipping engine probe"
+            PROBE_OK=0
+          fi
+          if [[ $PROBE_OK -ne 0 ]]; then
+            echo "DB readiness probe failed. Collecting logs and inspect for debugging."
+            docker inspect "$DB_CONTAINER" || true
+            docker logs --tail 1000 "$DB_CONTAINER" || true
+            # save logs to workspace root so artifact step finds them
+            docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
+            docker logs --tail 2000 "$DB_CONTAINER" > "$GITHUB_WORKSPACE/docker-db-1.logs" 2>&1 || true
+            exit 1
+          fi
+
       - name: Quick wait for services to appear
         working-directory: docker
         run: |
-          for i in $(seq 1 40); do
-            echo "Initial compose ps ($i)"
+          for i in $(seq 1 20); do
             docker compose ps || true
             sleep 2
           done
@@ -223,9 +247,6 @@ jobs:
         working-directory: docker
         run: |
           set -euo pipefail
-          echo "Listing containers:"
-          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
-
           TIMEOUT_SECS=${COMPOSE_WAIT_LONG}
           SLEEP_INTERVAL=5
           MAX_TRIES=$((TIMEOUT_SECS / SLEEP_INTERVAL))
@@ -245,31 +266,23 @@ jobs:
           fi
 
           if [[ -z "$CONTAINERS" ]]; then
-            echo "No containers found by heuristics; printing docker compose ps and failing."
             docker compose ps || true
             exit 1
           fi
 
-          echo "Containers to check:"
-          echo "$CONTAINERS"
-
           FAILED=0
           for C in $CONTAINERS; do
-            echo "Waiting for container '$C' to become healthy (if it has a healthcheck). Timeout ${TIMEOUT_SECS}s..."
             STATUS=""
             for try in $(seq 1 $MAX_TRIES); do
               HEALTH_JSON=$(docker inspect --format='{{json .State.Health}}' "$C" 2>/dev/null || echo "")
               if [[ -z "$HEALTH_JSON" ]]; then
                 STATE=$(docker inspect --format='{{.State.Status}}' "$C" 2>/dev/null || echo "not_found")
-                echo "  No Health object for $C; State.Status=$STATE"
                 if [[ "$STATE" == "running" ]]; then
-                  echo "  $C is running and has no healthcheck -> treating as OK"
                   STATUS="nohealth"
                   break
                 fi
               else
                 HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$C" 2>/dev/null || echo "")
-                echo "  Health status: $HEALTH_STATUS"
                 if [[ "$HEALTH_STATUS" == "healthy" ]]; then
                   STATUS="healthy"
                   break
@@ -285,40 +298,28 @@ jobs:
               echo "Container $C OK (status=$STATUS)"
             else
               echo "Container $C failed to become healthy (status=${STATUS:-unknown})"
-              echo "=== docker inspect $C ==="
               docker inspect "$C" || true
-              echo "=== docker logs $C (last 1000 lines) ==="
               docker logs --tail 1000 "$C" || true
 
               if [[ "$C" == "${DB_CONTAINER_NAME}" || "$C" =~ db ]]; then
-                echo "Detected DB container ($C) failing; showing host bind mount dir info for $DB_BIND_DIR"
                 ls -ld "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
                 ls -la "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
-                echo "Attempting remediation: determine UID from image and chown host dir, then recreate DB service"
-
                 DB_IMAGE="${{ steps.detect_db.outputs.db_image || '' }}"
                 if [[ -n "$DB_IMAGE" ]]; then
-                  echo "DB image (remediation): $DB_IMAGE"
                   uid=$(docker run --rm --entrypoint sh "$DB_IMAGE" -c "id -u postgres 2>/dev/null || id -u mysql 2>/dev/null || id -u 2>/dev/null || true" || true)
                   if [[ -n "$uid" && "$uid" =~ ^[0-9]+$ ]]; then
-                    echo "Remediation found uid: $uid"
                     sudo chown -R "${uid}:${uid}" "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
                   else
-                    echo "Remediation could not detect uid; trying candidate uids"
                     for u in $CANDIDATE_UIDS; do
                       sudo chown -R "${u}:${u}" "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
                     done
                     if [[ "${DB_RELAX_PERMS}" == "true" ]]; then
-                      echo "DB_RELAX_PERMS=true: relaxing permissions as last resort"
                       sudo chmod -R a+rwX "$GITHUB_WORKSPACE/$DB_BIND_DIR" || true
                     fi
                   fi
                 fi
-
-                echo "Recreating DB service with docker compose (no-deps, force recreate)"
                 docker compose up -d --no-deps --force-recreate db || docker compose up -d --no-deps --force-recreate || true
                 sleep 15
-                echo "DB logs after remediation:"
                 docker logs --tail 1000 "$C" || true
               fi
 
@@ -327,8 +328,6 @@ jobs:
           done
 
           if [[ $FAILED -ne 0 ]]; then
-            echo "One or more containers failed health checks. Saving compose logs for debugging."
-            # Write logs to workspace root so the upload-artifact step can find them
             docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
             docker logs --tail 2000 "${DB_CONTAINER_NAME}" > "$GITHUB_WORKSPACE/docker-db-1.logs" 2>&1 || true
             exit 1
@@ -346,12 +345,9 @@ jobs:
               RESULT=0
               break
             fi
-            echo "Waiting for HTTPS... ($i)"
             sleep 3
           done
           if [[ $RESULT -ne 0 ]]; then
-            echo "fail" > ./smoke_result.txt
-            # ensure compose logs are saved to workspace root
             docker compose logs --no-color > "$GITHUB_WORKSPACE/compose_logs.txt" || true
             exit 1
           fi
@@ -364,7 +360,6 @@ jobs:
             echo "Saved dashboard snapshot to pages-site/dashboard_snapshot.html"
           else
             echo "<!-- snapshot failed -->" > ../pages-site/dashboard_snapshot.html || true
-          fi
 
       - name: Collect logs & create pages site
         working-directory: docker
@@ -383,7 +378,6 @@ jobs:
             "    <p>Result: <strong>${STATUS}</strong></p>" \
             "    <p>Workflow run: <a href=\"${RUN_URL}\">Open run</a></p>" \
             '    <h2>Dashboard snapshot</h2>' \
-            '    <p>If snapshot failed, the file may be empty or contain an error note.</p>' \
             '    <iframe src="dashboard_snapshot.html" style="width:100%;height:600px;border:1px solid #ccc;"></iframe>' \
             '    <h2>Compose logs (tail)</h2>' \
             '    <pre>' > "$PAGES_DIR/index.html"
@@ -393,7 +387,6 @@ jobs:
             '    <p>Full logs: <a href="compose_logs.txt">compose_logs.txt</a></p>' \
             '  </body>' \
             '</html>' >> "$PAGES_DIR/index.html"
-          # copy workspace-root logs into pages site for convenience (best-effort)
           cp "$GITHUB_WORKSPACE/compose_logs.txt" "$PAGES_DIR/compose_logs.txt" || true
           cp "$GITHUB_WORKSPACE/docker-db-1.logs" "$PAGES_DIR/docker-db-1.logs" || true
           ls -la "$PAGES_DIR"
